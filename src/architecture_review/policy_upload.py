@@ -3,12 +3,13 @@
 import streamlit as st
 
 from architecture_review.document_processing import DocumentProcessingError, process_document
-from architecture_review.document_settings import development_preview, load_document_settings
+from architecture_review.document_settings import development_first_lines, development_preview, load_document_settings
+from architecture_review.ocr import OcrError, recognize_flagged_pages
 
 
 def clear_policy() -> None:
     """Release the previous extracted policy when the upload changes/removes."""
-    for key in ("policy_document", "policy_error", "policy_processed"):
+    for key in ("policy_document", "policy_error", "policy_processed", "policy_ocr_error", "policy_ocr_started"):
         st.session_state.pop(key, None)
 
 
@@ -56,7 +57,23 @@ def render_policy_upload() -> None:
         document = st.session_state.get("policy_document")
         if document is None:
             return
+        candidates = [part for part in document.passages if part.may_require_ocr and not part.ocr_attempted]
+        if document.format == "pdf" and candidates and not st.session_state.get("policy_ocr_started"):
+            # One bounded OCR attempt per upload, not on every Streamlit rerun.
+            st.session_state["policy_ocr_started"] = True
+            try:
+                with st.spinner("Recognising text on scanned or unreadable pages locally?"):
+                    document = recognize_flagged_pages(document, upload.getvalue())
+                st.session_state["policy_document"] = document
+            except OcrError as error:
+                st.session_state["policy_ocr_error"] = str(error)
+            except Exception:
+                st.session_state["policy_ocr_error"] = "Text recognition failed. Existing extracted text has been preserved."
+        if st.session_state.get("policy_ocr_error"):
+            st.error(st.session_state["policy_ocr_error"])
         labels = {"readable": "Readable text extracted", "needs_processing": "Partially readable", "unreadable": "No usable text extracted"}
+        if any(part.extraction_method == "ocr" for part in document.passages):
+            labels["needs_processing"] = "OCR text extracted — verification required"
         st.text(f"Format: {document.format.upper()} | Status: {labels[document.status]}")
         st.text(f"Further processing required: {'Yes' if document.requires_further_processing else 'No'}")
         if document.status == "readable":
@@ -67,6 +84,17 @@ def render_policy_upload() -> None:
         if unreadable:
             st.warning("Some pages in this document could not be read automatically. They may contain scanned text or images, be blank, or use unsupported content. Additional text recognition or manual review may be needed before these pages can be included in your architecture assessment.")
             st.text("Locations to review: " + ", ".join(passage.location for passage in unreadable))
+        for passage in document.passages:
+            if passage.ocr_attempted:
+                for warning in passage.warnings:
+                    st.warning(f"{passage.location}: {warning}")
+        first_lines = development_first_lines(document, settings)
+        if first_lines:
+            with st.expander("Temporary development check — first two extracted lines per PDF page", expanded=True):
+                if document.format != "pdf":
+                    st.caption("DOCX/TXT do not have reliable page numbers. Showing the first two extracted lines of the document.")
+                for location, line in first_lines:
+                    st.text(f"{location}: {line}")
         preview = development_preview(document, settings)
         if preview is not None:
             with st.expander("Development-only extracted-text preview (limited)"):

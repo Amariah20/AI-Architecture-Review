@@ -1,0 +1,3 @@
+[client]
+# Keep viewer features (theme settings and print), without developer controls.
+toolbarMode = "viewer"

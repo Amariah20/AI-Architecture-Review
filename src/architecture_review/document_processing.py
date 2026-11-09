@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from io import BytesIO
+import hashlib
 import logging
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -50,6 +51,8 @@ class Passage:
     page_number: int | None = None
     may_require_ocr: bool = False
     warnings: tuple[str, ...] = ()
+    extraction_method: Literal["native", "ocr"] = "native"
+    ocr_attempted: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,7 @@ class ProcessedDocument:
     passages: tuple[Passage, ...] = field(repr=False)
     status: Status
     warnings: tuple[str, ...] = ()
+    source_sha256: str = ""
 
     @property
     def requires_further_processing(self) -> bool:
@@ -222,4 +226,5 @@ def process_document(filename: str, data: bytes, limits: ProcessingLimits | None
     )
     if format_name == "docx":
         warnings += ("Extracted main-body paragraphs and tables only. Headers, footers, text boxes, images and tracked changes may need manual review; Word page numbers are not available.",)
-    return ProcessedDocument(filename=filename, format=format_name, passages=tuple(passages), status=status, warnings=warnings)
+    return ProcessedDocument(filename=filename, format=format_name, passages=tuple(passages), status=status, warnings=warnings,
+                             source_sha256=hashlib.sha256(data).hexdigest())

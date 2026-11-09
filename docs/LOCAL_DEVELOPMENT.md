@@ -126,11 +126,86 @@ No `.env` file is required or created.
 - TXT uses UTF-8 (optional BOM); nonempty readable lines retain original line
   numbers. Invalid encoding/binary controls are rejected.
 - Encrypted PDFs/Word files, legacy DOC, macros and corrupted or mismatched files
-  are rejected with safe messages. No password handling, OCR, chunking, embeddings,
-  vector storage or RAG integration is implemented.
+  are rejected with safe messages. No password handling, chunking, embeddings,
+  vector storage or RAG integration is implemented. Optional PDF OCR is described below.
 - Parser diagnostics are suppressed for privacy. Error messages never include
   the original parser error or extracted content.
 
 Synthetic tests build PDF/DOCX documents in memory, including an image-only PDF,
 and use simulated uploads for UI checks. Actual file-picker/browser interaction
 still needs a manual local check.
+
+The project configuration in `src/.streamlit/config.toml` uses viewer toolbar
+mode to retain theme/print options while disabling Deploy and other developer
+controls at startup. Launch from `src/` as shown above so Streamlit reads it.
+Activity-icon CSS is applied before document-processing imports. Restart the
+server after configuration changes.
+
+## Automatic local OCR
+
+Tesseract is a separate Windows application, not a pip package. This workstation
+was installed with the UB Mannheim Tesseract 5.4.0.20240606 package through winget,
+including English (`eng`) and orientation (`osd`) data. On another Windows machine:
+
+```powershell
+winget install --id UB-Mannheim.TesseractOCR --exact --source winget
+```
+
+The application checks PATH and the standard Program Files locations. For a
+custom installation, set `TESSERACT_CMD` to its absolute executable path before
+launching. Verify the engine and English data, for example:
+
+```powershell
+& 'C:\Program Files\Tesseract-OCR\tesseract.exe' --version
+& 'C:\Program Files\Tesseract-OCR\tesseract.exe' --list-langs
+```
+
+Python rendering uses the pinned `pypdfium2` dependency. No Poppler or pytesseract
+is needed. The native engine reads installed language files, but document bytes,
+rendered images and recognised text travel through memory pipes, not temporary
+document files. No OCR content is sent to AWS or logged.
+
+Upload a PDF. If embedded text extraction finds flagged pages, OCR runs
+automatically once for that upload, without a separate button. Only
+unattempted flagged pages are processed; existing readable passages are retained.
+Successful pages are labelled `extraction_method="ocr"` and `ocr_attempted=True`,
+with original page numbers. OCR output still needs manual verification, so the
+document keeps a further-processing/review status. Failed or blank pages remain
+flagged with safe warnings. To retry already attempted pages, re-upload the PDF.
+
+Limits per upload: five flagged pages, up to 300 DPI, 12 million pixels per page,
+30 seconds per rendering child, 30 seconds per Tesseract child and a 120-second
+overall processing deadline. Pages beyond these limits remain flagged; split a large PDF into smaller
+documents or review the remaining pages manually. Ordinary UI reruns do not
+repeat OCR, including after an engine error. Each rendering operation runs in a separate process because
+PDFium is not thread-safe. Overdue direct child processes are killed and waited
+for by Python. These controls are not an OS memory sandbox and OCR accuracy is
+not guaranteed, especially for rotated text, handwriting, tables or poor scans.
+
+### Temporary first-line visual check
+
+Stop Streamlit with Ctrl+C. To show the first two nonempty extracted lines of **every
+PDF page**, explicitly enable this temporary development-only view:
+
+```powershell
+$env:APP_ENV = "development"
+$env:POLICY_DEV_FIRST_LINES = "true"
+```
+
+Then run the usual Streamlit launch command. The expanded check displays
+`Page 1: ... (native extraction)` or `(OCR)`, capped at 200 characters per line (two lines per page).
+Unreadable pages show `[No readable text extracted]`. The display shows the results after automatic OCR completes. DOCX/TXT show the first two extracted lines and the first source location; they have no reliable page numbers. This is separate from the existing
+500-character preview setting and does not require `POLICY_DEV_PREVIEW=true`.
+
+Turn off the temporary check after visual confirmation:
+
+```powershell
+$env:POLICY_DEV_FIRST_LINES = "false"
+```
+
+Restart Streamlit for environment changes to take effect. The view is absent
+by default and always absent when `APP_ENV` is `production`.
+
+OCR tests include real in-memory synthetic PDF rendering and Tesseract
+recognition when the engine is present. The real-recognition test is skipped
+on machines without Tesseract; mocked OCR and privacy tests still run.

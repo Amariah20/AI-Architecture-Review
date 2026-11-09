@@ -8,8 +8,6 @@ from urllib.parse import urlsplit
 from PIL import Image
 import streamlit as st
 
-from architecture_review.aws_documentation import search_documentation
-from architecture_review.policy_upload import render_policy_upload
 
 
 logger = logging.getLogger(__name__)
@@ -18,7 +16,7 @@ PAGE_SIZE = 3
 
 PAGE_STYLES = """
 <style>
-[data-testid="stAppDeployButton"], [data-testid="stStatusWidget"] { display: none !important; }
+[data-testid="stAppDeployButton"], [data-testid^="stStatusWidget"] { display: none !important; }
 .st-key-pagination {
     border: 1px solid rgba(128,128,128,0.22);
     border-radius: 999px;
@@ -99,6 +97,8 @@ def change_page(page: int) -> None:
 
 def retrieve_results(architecture: str, question: str) -> None:
     """Fetch once per submission and retain results only in this session."""
+    from architecture_review.aws_documentation import search_documentation
+
     if not architecture.strip() or not question.strip():
         st.error("Enter both an architecture description and a review question.")
         return
@@ -131,6 +131,9 @@ def main() -> None:
     # A transparent icon leaves room for the user's future logo.
     st.set_page_config(page_title="AI Architecture Review", page_icon=Image.new("RGBA", (32, 32)))
     st.markdown(PAGE_STYLES, unsafe_allow_html=True)
+    # Paint toolbar styles before loading the PDF/DOCX/OCR integration modules.
+    from architecture_review.policy_upload import render_policy_upload
+
     st.title("AI Architecture Review & Optimisation Assistant")
     st.caption("Explore AWS guidance for your architecture. Documentation retrieval only; automated reviews are not available yet.")
     st.info("Use synthetic examples only. Your description and question are sent to AWS documentation search. Do not enter credentials, private policies or company details.")

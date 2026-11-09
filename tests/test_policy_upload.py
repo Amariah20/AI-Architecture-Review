@@ -1,6 +1,7 @@
 """UI checks using synthetic in-memory uploads; no browser or AWS required."""
 
 import importlib
+from dataclasses import replace
 import os
 from pathlib import Path
 import sys
@@ -26,9 +27,12 @@ class PolicyUploadTest(unittest.TestCase):
     def setUp(self) -> None:
         sys.path.insert(0, str(SOURCE))
         self.addCleanup(sys.path.pop, 0)
-        self.environment = patch.dict(os.environ, {"APP_ENV": "production", "POLICY_DEV_PREVIEW": "false", "POLICY_MAX_UPLOAD_MB": "10"})
+        self.environment = patch.dict(os.environ, {"APP_ENV": "production", "POLICY_DEV_PREVIEW": "false", "POLICY_DEV_FIRST_LINES": "false", "POLICY_MAX_UPLOAD_MB": "10"})
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        ocr_patcher = patch.object(policy_ui, "recognize_flagged_pages", side_effect=lambda document, data: document)
+        self.ocr_mock = ocr_patcher.start()
+        self.addCleanup(ocr_patcher.stop)
         self.app = AppTest.from_file(str(SOURCE / "architecture_review/web_app.py"), default_timeout=30)
 
     def upload(self, name: str, data: bytes) -> SimpleNamespace:
@@ -62,6 +66,13 @@ class PolicyUploadTest(unittest.TestCase):
             self.assertIn("Partially readable", self.visible_text())
             self.assertIn("Page 2", self.visible_text())
             self.assertIn("may contain scanned", self.visible_text())
+            self.app.run()
+            self.ocr_mock.assert_called_once()
+
+    def test_native_pdf_does_not_need_ocr(self) -> None:
+        with patch("streamlit.file_uploader", return_value=self.upload("native.pdf", pdf_bytes(["Readable text"]))):
+            self.app.run()
+            self.ocr_mock.assert_not_called()
 
     def test_preview_never_shown_in_production_even_when_enabled(self) -> None:
         with (
@@ -138,3 +149,42 @@ class PolicyUploadTest(unittest.TestCase):
             self.assertNotIn("policy_document", self.app.session_state)
             self.assertNotIn("Old synthetic policy", self.visible_text())
             self.assertTrue(self.app.error)
+
+    def test_first_lines_show_every_pdf_page_and_update_after_ocr(self) -> None:
+        data = pdf_bytes(["Native first line", None])
+        native = policy_ui.process_document("mixed.pdf", data)
+        recognised = replace(native.passages[1], text="OCR first line\nOCR second line\nThird line stays hidden",
+                             status="readable", may_require_ocr=False, ocr_attempted=True,
+                             extraction_method="ocr", warnings=("Verify OCR text.",))
+        result = replace(native, passages=(native.passages[0], recognised), status="needs_processing")
+        with (
+            patch.dict(os.environ, {"APP_ENV": "development", "POLICY_DEV_FIRST_LINES": "true"}),
+            patch("streamlit.file_uploader", return_value=self.upload("mixed.pdf", data)),
+            patch.object(policy_ui, "recognize_flagged_pages", return_value=result) as recognize,
+        ):
+            self.app.run()
+            self.assertIn("Page 1: Native first line", self.visible_text())
+            self.assertFalse(self.app.exception)
+            self.assertIn("Page 2: OCR first line\nOCR second line (OCR)", self.visible_text())
+            self.assertNotIn("Third line stays hidden", self.visible_text())
+            self.assertFalse(any(button.label == "Try text recognition" for button in self.app.button))
+            self.app.run()
+            recognize.assert_called_once()
+
+    def test_first_line_check_is_hidden_in_production_even_if_enabled(self) -> None:
+        with (
+            patch.dict(os.environ, {"POLICY_DEV_FIRST_LINES": "true"}),
+            patch("streamlit.file_uploader", return_value=self.upload("policy.pdf", pdf_bytes(["CONFIDENTIAL_SENTINEL"]))),
+        ):
+            self.app.run()
+            self.assertNotIn("CONFIDENTIAL_SENTINEL", self.visible_text())
+
+    def test_ocr_error_does_not_erase_native_extraction(self) -> None:
+        data = pdf_bytes(["Native policy", None])
+        with (
+            patch("streamlit.file_uploader", return_value=self.upload("mixed.pdf", data)),
+            patch.object(policy_ui, "recognize_flagged_pages", side_effect=policy_ui.OcrError("Engine unavailable")),
+        ):
+            self.app.run()
+            self.assertIn("Engine unavailable", self.visible_text())
+            self.assertIn("Native policy", self.app.session_state["policy_document"].passages[0].text)
