@@ -1,3 +1,7 @@
 [client]
 # Keep viewer features (theme settings and print), without developer controls.
 toolbarMode = "viewer"
+
+[ui]
+# Required for Streamlit's native theme selector and Print menu.
+hideTopBar = false

@@ -1,210 +1,150 @@
-"""Local Streamlit interface for AWS documentation retrieval."""
+﻿"""Responsive Streamlit workspace over the existing retrieval and extraction code."""
 
 import asyncio
 import logging
-import re
-from urllib.parse import urlsplit
 
 from PIL import Image
 import streamlit as st
 
+from architecture_review.web_styles import LOADING_OVERLAY, PAGE_STYLES
 
 
 logger = logging.getLogger(__name__)
 FETCH_LIMIT = 9
 PAGE_SIZE = 3
 
-PAGE_STYLES = """
-<style>
-[data-testid="stAppDeployButton"], [data-testid^="stStatusWidget"] { display: none !important; }
-.st-key-pagination {
-    border: 1px solid rgba(128,128,128,0.22);
-    border-radius: 999px;
-    background: var(--secondary-background-color);
-    box-shadow: 0 3px 12px rgba(0,0,0,0.08);
-    padding: 8px 16px;
-    margin-top: 12px;
-}
-.st-key-pagination button {
-    border: none; border-radius: 50%;
-    min-width: 36px; width: 36px; height: 36px; min-height: 36px;
-    padding: 0; background: transparent; color: var(--text-color, #777);
-}
-.st-key-pagination button p { color: inherit !important; }
-.st-key-pagination button:disabled,
-.st-key-pagination button:disabled:hover {
-    opacity: 1; color: #888 !important; background: transparent;
-    cursor: not-allowed;
-}
-.st-key-pagination button:focus-visible { outline: 2px solid #6478e8; outline-offset: 2px; }
-.review-loading {
-    position: fixed; inset: 0; z-index: 999999;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(128, 128, 128, 0.12);
-}
-.review-loading-card {
-    background: var(--background-color, white); color: var(--text-color, #222);
-    border-radius: 20px; padding: 32px 42px; text-align: center;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.12);
-}
-.review-loading-circle {
-    width: 64px; height: 64px; margin: 0 auto 20px;
-    border: 7px solid #ddd; border-top-color: #333;
-    border-radius: 50%; animation: review-spin 0.9s linear infinite;
-}
-@keyframes review-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-    .review-loading-circle { animation-duration: 3s; }
-}
-</style>
-"""
-
-LOADING_OVERLAY = """
-<div class="review-loading" role="status" aria-live="polite">
-  <div class="review-loading-card">
-    <div class="review-loading-circle" aria-hidden="true"></div>
-    <strong>LOADING…</strong><br>Searching AWS documentation
-  </div>
-</div>
-"""
-
-
-def format_excerpt(text: str) -> str:
-    """Use bold headings and Markdown links without loading remote images."""
-    lines = []
-    fence = None
-    for line in text.splitlines():
-        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if marker:
-            if fence is None:
-                fence = marker.group(1)[0]
-            elif marker.group(1)[0] == fence:
-                fence = None
-            lines.append(line)
-        elif fence is not None:
-            lines.append(line)
-        else:
-            line = re.sub(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"**\1**", line)
-            line = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", line)
-            lines.append(line)
-    return "\n".join(lines)
-
 
 def change_page(page: int) -> None:
-    """Change only the session's result page, without fetching again."""
-    st.session_state.result_page = page
+    st.session_state["result_page"] = page
 
 
-def retrieve_results(architecture: str, question: str) -> None:
-    """Fetch once per submission and retain results only in this session."""
+def retrieve_results(request: str, question: str | None = None) -> None:
+    """Pass submitted text to MCP unchanged apart from outer whitespace."""
     from architecture_review.aws_documentation import search_documentation
+    from architecture_review.review_session import record_review
 
-    if not architecture.strip() or not question.strip():
-        st.error("Enter both an architecture description and a review question.")
+    text = request.strip() if question is None else f"{request.strip()}\n\nReview question: {question.strip()}"
+    st.session_state["active_review_id"] = None
+    st.session_state.pop("review_error", None)
+    if not request.strip() or (question is not None and not question.strip()):
+        st.session_state["review_error"] = "Enter your architecture description and what you would like reviewed."
         return
-
-    query = f"{architecture.strip()}\n\nReview question: {question.strip()}"
     loading = st.empty()
     loading.markdown(LOADING_OVERLAY, unsafe_allow_html=True)
+    error = None
+    results = []
     try:
-        results = asyncio.run(search_documentation(query, limit=FETCH_LIMIT))
+        results = asyncio.run(search_documentation(text, limit=FETCH_LIMIT))
     except TimeoutError:
-        st.error("AWS documentation search timed out. Please try again shortly.")
-        return
+        error = "AWS documentation search timed out. Please try again shortly."
     except Exception:
-        # Avoid exposing service responses or user input in the browser or logs.
         logger.warning("AWS documentation retrieval failed.")
-        st.error("Could not retrieve AWS guidance. Check your internet connection and try again. The service may be temporarily unavailable or rate-limited.")
-        return
+        error = "Could not retrieve AWS guidance. Check your internet connection and try again. The service may be temporarily unavailable or rate-limited."
     finally:
         loading.empty()
+    names = tuple(record.filename for record in st.session_state["policy_documents"].values())
+    record_review(st.session_state, text, results[:FETCH_LIMIT], names, error)
 
-    if not results:
-        st.warning("No documentation found. Try a more specific review question.")
+
+def render_results() -> None:
+    from architecture_review.review_session import active_review
+    from architecture_review.web_components import render_source_card
+
+    st.header("Retrieved AWS documentation")
+    st.caption("Documentation sources, not a completed AI architecture review.")
+    if st.session_state.get("review_error"):
+        st.error(st.session_state["review_error"])
+    entry = active_review(st.session_state)
+    if entry is None:
+        with st.container(key="results_empty"):
+            st.markdown('<div class="empty-state"><strong>No search yet</strong><p>Enter your architecture and review request, optionally upload policies, then select Review to find AWS documentation.</p></div>', unsafe_allow_html=True)
         return
-
-    st.session_state["documentation_results"] = results[:FETCH_LIMIT]
+    if entry.error:
+        st.error(entry.error)
+        return
+    if not entry.sources:
+        st.warning("No documentation found. Try a more specific review request.")
+        return
+    st.markdown(f'<div class="retrieval-summary"><strong>{len(entry.sources)} AWS documentation sources retrieved</strong><br>Official sources for your submitted request</div>', unsafe_allow_html=True)
+    page = st.session_state["result_page"]
+    pages = (len(entry.sources) + PAGE_SIZE - 1) // PAGE_SIZE
+    start = page * PAGE_SIZE
+    with st.container(key="source_cards"):
+        for source in entry.sources[start:start + PAGE_SIZE]:
+            render_source_card(source)
+    if pages > 1:
+        st.markdown(f'<style>.st-key-pagination .st-key-page_{page} button {{background:#4054b8!important;color:#fff!important;border:2px solid #9ba9ff!important;}}</style>', unsafe_allow_html=True)
+        st.caption(f"Page {page + 1} of {pages}")
+        with st.container(key="pagination", horizontal=True, horizontal_alignment="center", vertical_alignment="center"):
+            st.button("‹", key="previous_page", help="Previous page", disabled=page == 0,
+                      on_click=change_page, args=(page - 1,))
+            for index in range(pages):
+                st.button(str(index + 1), key=f"page_{index}", help=f"Go to page {index + 1}",
+                          on_click=change_page, args=(index,))
+            st.button("›", key="next_page", help="Next page", disabled=page == pages - 1,
+                      on_click=change_page, args=(page + 1,))
+    st.caption("Grounded architecture reviews will be available when Amazon Bedrock integration is completed.")
 
 
 def main() -> None:
-    """Collect a description and question, then display retrieved sources."""
-    # A transparent icon leaves room for the user's future logo.
-    st.set_page_config(page_title="AI Architecture Review", page_icon=Image.new("RGBA", (32, 32)))
+    st.set_page_config(page_title="AI Architecture Review", page_icon=Image.new("RGBA", (32, 32)), layout="wide", initial_sidebar_state="auto")
     st.markdown(PAGE_STYLES, unsafe_allow_html=True)
-    # Paint toolbar styles before loading the PDF/DOCX/OCR integration modules.
-    from architecture_review.policy_upload import render_policy_upload
+    from architecture_review.policy_upload import render_policy_upload, render_upload_control
+    from architecture_review.review_session import initialise
+    from architecture_review.web_components import render_history, render_saved_sources, render_sidebar, render_utilities
 
+    initialise(st.session_state)
+    render_sidebar()
+    render_utilities()
     st.title("AI Architecture Review & Optimisation Assistant")
-    st.caption("Explore AWS guidance for your architecture. Documentation retrieval only; automated reviews are not available yet.")
-    st.info("Use synthetic examples only. Your description and question are sent to AWS documentation search. Do not enter credentials, private policies or company details.")
-    render_policy_upload()
-
-    with st.form("documentation_search"):
-        architecture = st.text_area(
-            "AWS architecture description",
-            placeholder="A web application runs on EC2 and connects to an RDS MySQL database.",
-            max_chars=10000,
-        )
-        question = st.text_input(
-            "Review question",
-            placeholder="What are the security risks of public database access?",
-            max_chars=2000,
-        )
-        submitted = st.form_submit_button("Find AWS guidance")
-
-    if submitted:
-        # Clear earlier results even if the replacement search fails validation.
-        st.session_state.pop("documentation_results", None)
-        st.session_state["result_page"] = 0
-        retrieve_results(architecture, question)
-
-    results = st.session_state.get("documentation_results", [])
-    if not results:
+    st.caption("Explore AWS guidance and prepare company policies for future grounded architecture reviews.")
+    view = st.session_state["workspace_view"]
+    if view == "history":
+        render_history()
         return
+    if view == "saved":
+        render_saved_sources()
+        return
+    from architecture_review.review_session import active_review
+    if active_review(st.session_state) is not None:
+        with st.expander("Edit request and policies", expanded=False):
+            render_composer()
+        with st.container(key="results_panel"):
+            render_results()
+    else:
+        with st.container(key="review_workspace"):
+            left, right = st.columns([1, 1.05], gap="large")
+            with left:
+                render_composer()
+                if active_review(st.session_state) is not None:
+                    st.rerun()
+            with right:
+                with st.container(border=True, key="results_panel"):
+                    render_results()
 
-    st.subheader("Retrieved AWS documentation")
-    st.caption("These excerpts are source material, not a completed architecture assessment.")
-    pages = (len(results) + PAGE_SIZE - 1) // PAGE_SIZE
-    start = st.session_state.result_page * PAGE_SIZE
-    for index, result in enumerate(results[start:start + PAGE_SIZE], start=start + 1):
-        with st.container(border=True):
-            st.text(f"{index}. {result.title}")
-            st.markdown(format_excerpt(result.context), unsafe_allow_html=False)
-            if re.search(r"\b(?:figure|fig\.|diagram|illustration)\s*\d*", result.context, re.IGNORECASE):
-                st.caption("This excerpt refers to a figure or diagram. Open the source page to view it; images are not included in search excerpts.")
-            url = urlsplit(result.url)
-            if url.scheme == "https" and url.hostname and not url.username and not url.password:
-                st.link_button("Open source", result.url)
 
-    if pages > 1:
-        # Widget keys give us a stable target without relying on internal button kinds.
-        active_page = st.session_state.result_page
-        st.markdown(f"""
-        <style>
-        .st-key-pagination .st-key-page_{active_page} button,
-        .st-key-pagination .st-key-page_{active_page} button:hover,
-        .st-key-pagination .st-key-page_{active_page} button:focus {{
-            background: #4054b8 !important;
-            color: #fff !important;
-            border: 2px solid #9ba9ff !important;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.18);
-        }}
-        </style>
-        """, unsafe_allow_html=True)
-        st.caption(f"Page {st.session_state.result_page + 1} of {pages}")
-        with st.container(key="pagination", horizontal=True, horizontal_alignment="center", vertical_alignment="center", gap="small"):
-            st.button("‹", key="previous_page", help="Previous page",
-                      disabled=st.session_state.result_page == 0,
-                      on_click=change_page, args=(st.session_state.result_page - 1,))
-            for page in range(pages):
-                st.button(
-                    str(page + 1), key=f"page_{page}", help=f"Go to page {page + 1}",
-                    type="primary" if page == st.session_state.result_page else "secondary",
-                    on_click=change_page, args=(page,),
-                )
-            st.button("›", key="next_page", help="Next page",
-                      disabled=st.session_state.result_page == pages - 1,
-                      on_click=change_page, args=(st.session_state.result_page + 1,))
+def render_composer() -> None:
+    from architecture_review.policy_upload import render_policy_upload, render_upload_control
+
+    with st.container(key="composer"):
+        request = st.text_area(
+            "Architecture and review request", key="review_input", height=200, max_chars=12000,
+            placeholder="Describe your AWS architecture, context and what you would like reviewed (security, compliance, cost or resilience). You can include multiple statements and questions.",
+        )
+        with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
+            render_upload_control()
+            submit = st.button("Review", key="submit_review", type="primary", icon=":material/play_arrow:",
+                               help="Retrieve AWS documentation for your submitted text.")
+        st.caption("Your message goes to AWS documentation search. Uploaded policies stay local and are not used in the search yet.")
+    render_policy_upload()
+    if submit:
+        retrieve_results(request)
+
+
+# Retained for existing callers/tests of the excerpt formatter.
+def format_excerpt(text: str) -> str:
+    from architecture_review.web_components import format_excerpt as format_text
+    return format_text(text)
 
 
 if __name__ == "__main__":
