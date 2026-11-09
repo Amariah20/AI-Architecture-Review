@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "AI Architecture Review & Optimisation Assistant"
 dependencies = [
     "mcp==2.3.0",
+    "streamlit==1.67.0",
 ]
 
 [tool.setuptools.packages.find]

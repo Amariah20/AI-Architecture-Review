@@ -87,6 +87,27 @@ class RetrievalTest(unittest.IsolatedAsyncioTestCase):
                 await documentation.search_documentation("  ")
             factory.assert_not_called()
 
+    async def test_custom_result_limit_is_sent_to_server(self) -> None:
+        client = AsyncMock()
+        client.list_tools.return_value = SimpleNamespace(tools=[Tool(
+            name="aws___search_documentation", inputSchema={},
+        )], next_cursor=None)
+        client.call_tool.return_value = CallToolResult(content=[], structuredContent=payload())
+        with patch.object(documentation, "Client") as factory:
+            factory.return_value.__aenter__.return_value = client
+            await documentation.search_documentation("RDS", limit=9)
+            client.call_tool.assert_awaited_once_with(
+                "aws___search_documentation",
+                {"search_phrase": "RDS", "topics": ["general"], "limit": 9},
+            )
+
+    async def test_invalid_limit_does_not_connect(self) -> None:
+        with patch.object(documentation, "Client") as factory:
+            for limit in (0, 10, True, "9"):
+                with self.subTest(limit=limit), self.assertRaises(ValueError):
+                    await documentation.search_documentation("RDS", limit=limit)
+            factory.assert_not_called()
+
     async def test_missing_tool_does_not_search(self) -> None:
         client = AsyncMock()
         client.list_tools.return_value = SimpleNamespace(tools=[], next_cursor=None)

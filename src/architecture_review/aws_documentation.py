@@ -60,11 +60,13 @@ def parse_search_response(response: CallToolResult) -> list[DocumentationResult]
     return documents
 
 
-async def search_documentation(search_query: str) -> list[DocumentationResult]:
+async def search_documentation(search_query: str, *, limit: int = 3) -> list[DocumentationResult]:
     """Search AWS guidance without terminal input or output."""
     search_query = search_query.strip()
     if not search_query:
         raise ValueError("Search query must not be empty.")
+    if type(limit) is not int or not 1 <= limit <= 9:
+        raise ValueError("Result limit must be an integer between 1 and 9.")
 
     async with asyncio.timeout(TIMEOUT_SECONDS):
         async with Client(SERVER_URL) as client:
@@ -88,7 +90,7 @@ async def search_documentation(search_query: str) -> list[DocumentationResult]:
 
             response = await client.call_tool(
                 matches[0].name,
-                {"search_phrase": search_query, "topics": ["general"], "limit": 3},
+                {"search_phrase": search_query, "topics": ["general"], "limit": limit},
             )
 
     return parse_search_response(response)
