@@ -194,29 +194,12 @@ class ExtractionTest(unittest.TestCase):
         self.assertNotIn("CONFIDENTIAL_SENTINEL", repr(document.passages[0]))
 
 
-class PreviewSettingsTest(unittest.TestCase):
-    def test_preview_disabled_by_default_and_in_production(self) -> None:
-        document = processing.process_document("policy.txt", b"Synthetic private policy text")
-        for settings in (settings_module.DocumentSettings(),
-                         settings_module.DocumentSettings(environment="production", enable_preview=True),
-                         settings_module.DocumentSettings(environment="development", enable_preview=False)):
-            self.assertIsNone(settings_module.development_preview(document, settings))
-
-    def test_explicit_development_preview_is_bounded(self) -> None:
-        settings = settings_module.DocumentSettings(environment="development", enable_preview=True)
-        for content in (b"Short policy", b"A" * 2000):
-            document = processing.process_document("policy.txt", content)
-            preview = settings_module.development_preview(document, settings)
-            self.assertLessEqual(len(preview), 501)
-            self.assertLess(len(preview), len(content))
-
-    def test_environment_settings_fail_closed(self) -> None:
+class DocumentSettingsTest(unittest.TestCase):
+    def test_upload_limit_environment_configuration(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(settings_module.load_document_settings().preview_allowed)
-        with patch.dict(os.environ, {"APP_ENV": "production", "POLICY_DEV_PREVIEW": "true", "POLICY_MAX_UPLOAD_MB": "2"}, clear=True):
-            settings = settings_module.load_document_settings()
-            self.assertFalse(settings.preview_allowed)
-            self.assertEqual(settings.limits.max_upload_bytes, 2 * 1024 * 1024)
+            self.assertEqual(settings_module.load_document_settings().upload_limit_mb, 10)
+        with patch.dict(os.environ, {"POLICY_MAX_UPLOAD_MB": "2"}, clear=True):
+            self.assertEqual(settings_module.load_document_settings().limits.max_upload_bytes, 2 * 1024 * 1024)
         for value in ("zero", "0", "26"):
             with patch.dict(os.environ, {"POLICY_MAX_UPLOAD_MB": value}), self.assertRaises(ValueError):
                 settings_module.load_document_settings()

@@ -74,26 +74,18 @@ class PolicyUploadTest(unittest.TestCase):
             self.app.run()
             self.ocr_mock.assert_not_called()
 
-    def test_preview_never_shown_in_production_even_when_enabled(self) -> None:
+    def test_legacy_debug_flags_cannot_display_extracted_text(self) -> None:
         with (
-            patch.dict(os.environ, {"POLICY_DEV_PREVIEW": "true"}),
-            patch("streamlit.file_uploader", return_value=self.upload("policy.txt", b"CONFIDENTIAL_SENTINEL policy")),
-        ):
-            self.app.run()
-            self.assertNotIn("CONFIDENTIAL_SENTINEL", self.visible_text())
-            self.assertFalse(any("Development-only" in item.label for item in self.app.expander))
-
-    def test_development_preview_is_explicit_and_limited(self) -> None:
-        with (
-            patch.dict(os.environ, {"APP_ENV": "development", "POLICY_DEV_PREVIEW": "true"}),
-            patch("streamlit.file_uploader", return_value=self.upload("policy.txt", b"SYNTHETIC-" * 200)),
+            patch.dict(os.environ, {"APP_ENV": "development", "POLICY_DEV_PREVIEW": "true", "POLICY_DEV_FIRST_LINES": "true"}),
+            patch("streamlit.file_uploader", return_value=self.upload("policy.pdf", pdf_bytes(["CONFIDENTIAL_SENTINEL"]))),
         ):
             self.app.run()
             self.assertFalse(self.app.exception)
-            self.assertTrue(any("Development-only" in item.label for item in self.app.expander))
-            previews = [item.value for item in self.app.text if item.value.startswith("SYNTHETIC-")]
-            self.assertEqual(len(previews), 1)
-            self.assertLessEqual(len(previews[0]), 501)
+            self.assertNotIn("CONFIDENTIAL_SENTINEL", self.visible_text())
+            self.assertFalse(any("preview" in item.label.lower() or "development check" in item.label.lower()
+                                 for item in self.app.expander))
+
+
 
     def test_remove_upload_clears_policy(self) -> None:
         with patch("streamlit.file_uploader", return_value=self.upload("policy.txt", b"Synthetic policy")):
@@ -150,7 +142,7 @@ class PolicyUploadTest(unittest.TestCase):
             self.assertNotIn("Old synthetic policy", self.visible_text())
             self.assertTrue(self.app.error)
 
-    def test_first_lines_show_every_pdf_page_and_update_after_ocr(self) -> None:
+    def test_automatic_ocr_keeps_text_in_memory_without_displaying_it(self) -> None:
         data = pdf_bytes(["Native first line", None])
         native = policy_ui.process_document("mixed.pdf", data)
         recognised = replace(native.passages[1], text="OCR first line\nOCR second line\nThird line stays hidden",
@@ -163,21 +155,16 @@ class PolicyUploadTest(unittest.TestCase):
             patch.object(policy_ui, "recognize_flagged_pages", return_value=result) as recognize,
         ):
             self.app.run()
-            self.assertIn("Page 1: Native first line", self.visible_text())
+            self.assertNotIn("Native first line", self.visible_text())
             self.assertFalse(self.app.exception)
-            self.assertIn("Page 2: OCR first line\nOCR second line (OCR)", self.visible_text())
+            self.assertNotIn("OCR first line", self.visible_text())
+            self.assertIn("OCR first line", self.app.session_state["policy_document"].passages[1].text)
+            self.assertFalse(any("development" in item.label.lower() for item in self.app.expander))
             self.assertNotIn("Third line stays hidden", self.visible_text())
             self.assertFalse(any(button.label == "Try text recognition" for button in self.app.button))
             self.app.run()
             recognize.assert_called_once()
 
-    def test_first_line_check_is_hidden_in_production_even_if_enabled(self) -> None:
-        with (
-            patch.dict(os.environ, {"POLICY_DEV_FIRST_LINES": "true"}),
-            patch("streamlit.file_uploader", return_value=self.upload("policy.pdf", pdf_bytes(["CONFIDENTIAL_SENTINEL"]))),
-        ):
-            self.app.run()
-            self.assertNotIn("CONFIDENTIAL_SENTINEL", self.visible_text())
 
     def test_ocr_error_does_not_erase_native_extraction(self) -> None:
         data = pdf_bytes(["Native policy", None])

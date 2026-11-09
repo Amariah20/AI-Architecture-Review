@@ -94,26 +94,9 @@ allocate memory before our decoded-content check; do not expose this local
 prototype as a public upload service without isolated processing and stronger
 resource controls.
 
-### Development preview only
-
-The environment defaults to `production`, with previews disabled. For local
-debugging with synthetic policies only, explicitly set both:
-
-```powershell
-$env:APP_ENV = "development"
-$env:POLICY_DEV_PREVIEW = "true"
-```
-
-A labelled, collapsed expander then permits at most 500 extracted characters
-(and never the entire document). A production configuration suppresses previews
-even if `POLICY_DEV_PREVIEW` is true. Return to safe defaults with:
-
-```powershell
-$env:APP_ENV = "production"
-$env:POLICY_DEV_PREVIEW = "false"
-```
-
-No `.env` file is required or created.
+Extracted policy text is never displayed, including in development mode. The
+former preview environment flags are no longer used. Status, warnings, filenames
+and page references remain visible; full text stays in session memory.
 
 ### Extraction limitations
 
@@ -181,30 +164,6 @@ repeat OCR, including after an engine error. Each rendering operation runs in a 
 PDFium is not thread-safe. Overdue direct child processes are killed and waited
 for by Python. These controls are not an OS memory sandbox and OCR accuracy is
 not guaranteed, especially for rotated text, handwriting, tables or poor scans.
-
-### Temporary first-line visual check
-
-Stop Streamlit with Ctrl+C. To show the first two nonempty extracted lines of **every
-PDF page**, explicitly enable this temporary development-only view:
-
-```powershell
-$env:APP_ENV = "development"
-$env:POLICY_DEV_FIRST_LINES = "true"
-```
-
-Then run the usual Streamlit launch command. The expanded check displays
-`Page 1: ... (native extraction)` or `(OCR)`, capped at 200 characters per line (two lines per page).
-Unreadable pages show `[No readable text extracted]`. The display shows the results after automatic OCR completes. DOCX/TXT show the first two extracted lines and the first source location; they have no reliable page numbers. This is separate from the existing
-500-character preview setting and does not require `POLICY_DEV_PREVIEW=true`.
-
-Turn off the temporary check after visual confirmation:
-
-```powershell
-$env:POLICY_DEV_FIRST_LINES = "false"
-```
-
-Restart Streamlit for environment changes to take effect. The view is absent
-by default and always absent when `APP_ENV` is `production`.
 
 OCR tests include real in-memory synthetic PDF rendering and Tesseract
 recognition when the engine is present. The real-recognition test is skipped

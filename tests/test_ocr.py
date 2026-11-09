@@ -1,9 +1,7 @@
 """Local OCR tests, including real synthetic image text when Tesseract exists."""
 
-from dataclasses import replace
 from io import BytesIO
 import importlib
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -21,7 +19,6 @@ sys.path.insert(0, str(SOURCE))
 try:
     ocr = importlib.import_module("architecture_review.ocr")
     processing = importlib.import_module("architecture_review.document_processing")
-    settings_module = importlib.import_module("architecture_review.document_settings")
 finally:
     sys.path.pop(0)
 
@@ -129,22 +126,7 @@ class OcrTest(unittest.TestCase):
         render.assert_not_called()
         self.assertFalse(result.passages[1].ocr_attempted)
 
-    def test_first_lines_are_development_only_and_include_blank_pages(self) -> None:
-        settings = settings_module.DocumentSettings(environment="development", enable_first_lines=True)
-        lines = settings_module.development_first_lines(self.document, settings)
-        self.assertEqual([location for location, line in lines], ["Page 1", "Page 2", "Page 3"])
-        self.assertIn("Native page", lines[0][1])
-        self.assertIn("No readable text", lines[1][1])
-        self.assertFalse(settings_module.development_first_lines(
-            self.document, replace(settings, environment="production")))
-        self.assertFalse(settings_module.development_first_lines(self.document, settings_module.DocumentSettings()))
 
-    def test_first_line_never_invents_docx_or_txt_pages(self) -> None:
-        document = processing.process_document("policy.txt", b"First line\nSecond line")
-        settings = settings_module.DocumentSettings(environment="development", enable_first_lines=True)
-        lines = settings_module.development_first_lines(document, settings)
-        self.assertEqual(len(lines), 1)
-        self.assertEqual(lines[0][0], "Line 1")
 
 
 class LocalOcrIntegrationTest(unittest.TestCase):

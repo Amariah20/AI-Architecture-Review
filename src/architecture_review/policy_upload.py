@@ -3,7 +3,7 @@
 import streamlit as st
 
 from architecture_review.document_processing import DocumentProcessingError, process_document
-from architecture_review.document_settings import development_first_lines, development_preview, load_document_settings
+from architecture_review.document_settings import load_document_settings
 from architecture_review.ocr import OcrError, recognize_flagged_pages
 
 
@@ -88,14 +88,3 @@ def render_policy_upload() -> None:
             if passage.ocr_attempted:
                 for warning in passage.warnings:
                     st.warning(f"{passage.location}: {warning}")
-        first_lines = development_first_lines(document, settings)
-        if first_lines:
-            with st.expander("Temporary development check — first two extracted lines per PDF page", expanded=True):
-                if document.format != "pdf":
-                    st.caption("DOCX/TXT do not have reliable page numbers. Showing the first two extracted lines of the document.")
-                for location, line in first_lines:
-                    st.text(f"{location}: {line}")
-        preview = development_preview(document, settings)
-        if preview is not None:
-            with st.expander("Development-only extracted-text preview (limited)"):
-                st.text(preview)
