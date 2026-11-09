@@ -9,6 +9,7 @@ from PIL import Image
 import streamlit as st
 
 from architecture_review.aws_documentation import search_documentation
+from architecture_review.policy_upload import render_policy_upload
 
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ def main() -> None:
     st.title("AI Architecture Review & Optimisation Assistant")
     st.caption("Explore AWS guidance for your architecture. Documentation retrieval only; automated reviews are not available yet.")
     st.info("Use synthetic examples only. Your description and question are sent to AWS documentation search. Do not enter credentials, private policies or company details.")
+    render_policy_upload()
 
     with st.form("documentation_search"):
         architecture = st.text_area(
